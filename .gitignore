@@ -1,0 +1,33 @@
+# ---- IAR 构建输出 ----
+EWARM/**/Obj/
+EWARM/**/List/
+EWARM/**/Exe/
+*.out
+*.map
+*.hex
+*.bin
+*.d79
+*.o
+
+# ---- 不参与编译的大体积资源 ----
+Utilities/Media/
+Utilities/PC_Software/
+Utilities/CPU/
+Utilities/JPEG/
+Utilities/Log/
+Drivers/CMSIS/Lib/
+Drivers/CMSIS/DSP/
+Drivers/CMSIS/docs/
+Drivers/BSP/Adafruit_Shield/
+Drivers/BSP/STM32756G_EVAL/
+Drivers/BSP/STM32F723E-Discovery/
+Drivers/BSP/STM32F7308-Discovery/
+Drivers/BSP/STM32F7508-Discovery/
+Drivers/BSP/STM32F769I-Discovery/
+Drivers/BSP/STM32F769I_EVAL/
+Drivers/BSP/STM32F7xx_Nucleo_144/
+
+# ---- 临时文件 ----
+*.zip
+*.bak
+*.tmp
