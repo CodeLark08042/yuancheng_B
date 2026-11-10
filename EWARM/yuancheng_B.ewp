@@ -1065,6 +1065,9 @@
                     <name>$PROJ_DIR$\..\Core\Src\gpio.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Core\Src\i2c.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Core\Src\main.c</name>
                 </file>
                 <file>
@@ -1072,6 +1075,9 @@
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Core\Src\stm32f7xx_it.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Core\Src\touch.c</name>
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Core\Src\usart.c</name>

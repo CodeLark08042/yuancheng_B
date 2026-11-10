@@ -20,7 +20,8 @@
 #include "main.h"
 #include "usart.h"
 #include "gpio.h"
-
+#include "i2c.h"
+#include "touch.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include<stdio.h>
@@ -38,11 +39,12 @@
 #define HIST  530
 #define WAVE_Y 40
 #define WAVE_W 480
-#define WAVE_H 180
+#define WAVE_H 140
 #define DIG_Y 226
 #define DIG_H 15
-
 #define USE_SELF_LOOP 1
+#define BTN_Y 186
+#define BTN_H 32
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -102,6 +104,16 @@ uint32_t duty2_pct;
 
 char line3[40];
 char line4[40];
+
+
+uint8_t touch_ok =0;
+
+//button
+uint8_t ch_mask = 0x1f;
+uint8_t gear_sel = 0;
+uint8_t run_flag = 1;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -154,6 +166,9 @@ void draw_wave(void)
   {
     BSP_LCD_DrawLine(0,(uint16_t)(WAVE_Y +i),(uint16_t)(WAVE_W - 1),(uint16_t)(WAVE_Y +i));
   }
+    //————————————————————————————————绘制CH1——————————————————————————————————————
+  if(ch_mask &0x01)
+  {
   BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
   y_prev = WAVE_Y +WAVE_H - 1 - (int)(((uint32_t)hist1[HIST - WAVE_W] * (WAVE_H - 1))/4095);
   for(i = 1 ; i<WAVE_W ; i++)
@@ -162,7 +177,10 @@ void draw_wave(void)
     BSP_LCD_DrawLine((uint16_t)(i -1),(uint16_t)y_prev,(uint16_t)i,(uint16_t)y);
     y_prev = y;
   }
-  
+  }
+  //————————————————————————————————绘制CH2——————————————————————————————————————
+  if(ch_mask &0x02)
+  {
   BSP_LCD_SetTextColor(LCD_COLOR_YELLOW);
   y_prev = WAVE_Y + WAVE_H -1 -(int)(((uint32_t)hist2[HIST - WAVE_W] * (WAVE_H - 1)) / 4095);
   for(i = 1 ; i<WAVE_W ; i++)
@@ -171,6 +189,8 @@ void draw_wave(void)
     BSP_LCD_DrawLine((uint16_t)(i -1),(uint16_t)y_prev,(uint16_t)i,(uint16_t)y);
     y_prev = y;
   }
+}
+
 }
 
 void draw_dig(void)
@@ -191,6 +211,8 @@ void draw_dig(void)
   
   for(ch = 0;ch<3;ch++)
   {
+    if((ch_mask & (uint8_t)(0x04 <<ch)) == 0)
+    {continue;}
     lane = DIG_Y + ch * DIG_H;
     y_hi = lane + 3;
     y_lo = lane +DIG_H - 3;
@@ -375,6 +397,109 @@ void send_ctrl(UART_HandleTypeDef *huart, uint8_t cmd, uint16_t param)
   
   
 }
+
+void draw_button(uint16_t x, uint16_t y,uint16_t w,uint16_t h,const char *s ,uint8_t on)
+{
+  uint32_t bg;
+  bg = on ? LCD_COLOR_DARKGREEN : LCD_COLOR_DARKGRAY;
+  
+  BSP_LCD_SetTextColor(bg);
+  BSP_LCD_FillRect(x,y,w,h);
+  
+  BSP_LCD_SetBackColor(bg);
+  BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+  BSP_LCD_DisplayStringAt((uint16_t)(x + 6),(uint16_t)(y +10),(uint8_t *)s,LEFT_MODE);
+}
+
+void draw_buttons(void)
+{
+  char txt[8];
+  
+  BSP_LCD_SetFont(&Font12);
+  
+  if(gear_sel == 0){sprintf(txt,"10ms");}
+  else{sprintf(txt,"5ms");}
+  
+  draw_button(4,BTN_Y,76,BTN_H,txt,1);
+  
+  draw_button(86,BTN_Y,52,BTN_H,"CH1",(ch_mask & 0x01) ?1:0);
+  draw_button(142,BTN_Y,52,BTN_H,"CH2",(ch_mask & 0x02) ?1:0);
+  draw_button(198,BTN_Y,44,BTN_H,"D1",(ch_mask & 0x04) ?1:0);
+  draw_button(246,BTN_Y,44,BTN_H,"D2",(ch_mask & 0x08) ?1:0);
+  draw_button(294,BTN_Y,44,BTN_H,"D3",(ch_mask & 0x10) ?1:0);
+  draw_button(344,BTN_Y,64,BTN_H,(run_flag ?"RUN":"HOLD"),1);
+  
+  BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
+  BSP_LCD_SetFont(&Font16);
+}
+
+void touch_action(uint16_t x, uint16_t y)
+{
+  if(y<BTN_Y || y>(BTN_Y + BTN_H)){return;}
+  
+  if(x>= 4&& x<= 80)
+  {
+    gear_sel = (gear_sel == 0)?1:0;
+
+#if !USE_SELF_LOOP
+    send_ctrl(&huart6,0x01,gear_sel);
+#endif
+  }
+  else if(x>= 86 && x<=138)
+  {
+    ch_mask ^= 0x01;  
+  }
+  else if(x>= 142 && x <=194)
+  {
+    ch_mask ^= 0x02;
+  }
+  else if(x>=198 && x<= 242)
+  {
+    ch_mask ^= 0x04;
+  }
+  else if(x>=246 && x<= 290)
+  {
+    ch_mask ^= 0x08;
+  }
+  
+  else if(x>=294 && x<= 338)
+  {
+    ch_mask ^= 0x10;
+  }
+  else if(x>=344 && x<= 408)
+  {
+    run_flag = (run_flag == 0)?1:0;
+  }
+  
+  else{return;}
+  
+  draw_buttons();
+}
+
+void touch_service(void)
+{
+  static uint8_t touched = 0;
+  static uint32_t t_touch = 0;
+  uint16_t x =0;
+  uint16_t y = 0;
+  
+  if(HAL_GetTick() - t_touch < 20){return;}
+  
+  t_touch = HAL_GetTick();
+  
+  if(touch_read(&x,&y))
+  {
+    if(t_touch == 0)
+    {
+      touched =1;
+      touch_action(x,y);
+    }
+  }
+  else
+  {
+    touched = 0;
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -459,6 +584,19 @@ int main(void)
 
   HAL_UART_Receive_IT(&huart6, &rx_byte, 1);
   
+  MX_I2C3_Init();
+  touch_ok = touch_init();
+  draw_buttons();
+  {
+    char msg[20];
+    if(touch_ok) {sprintf(msg,"TOUCH OK\r\n");}
+    else{sprintf(msg,"TOUCH ERR %u\r\n",(unsigned)touch_error());}
+    HAL_UART_Transmit(&huart1,(uint8_t *)msg,(uint16_t)strlen(msg),20);
+  }
+  
+  
+  
+  
   uint8_t crc_vec[] = "123456789";
   crc_test = crc16_ccitt_false(crc_vec,9);
   
@@ -513,13 +651,40 @@ int main(void)
       tx_seq++;
     }
 #endif  
-   static uint32_t t_cmd = 0;
-   if(HAL_GetTick() - t_cmd >= 1000)
-   {
-     t_cmd = HAL_GetTick();
-     send_ctrl(&huart1, 0x06,0);
-   }
-    //单次发帧dancifazhen
+    
+        touch_service();
+    
+//    ——————————————————————自测控制发送————————————————————————————————————————————————————————————————
+//   static uint32_t t_cmd = 0;
+//   if(HAL_GetTick() - t_cmd >= 1000)
+//   {
+//     t_cmd = HAL_GetTick();
+//     send_ctrl(&huart1, 0x06,0);
+//   }
+    
+//———————————————————————————————————临时轮询验证坐标—————————————————————————————————————————————————
+//    static uint32_t t_touch =0 ;
+//    if(HAL_GetTick() - t_touch >= 100)
+//    {
+//      uint16_t tx = 0;
+//      uint16_t ty = 0;
+//        
+//        t_touch = HAL_GetTick();
+//      
+//      if(touch_read(&tx,&ty))
+//      {
+//        char msg[24];
+//        sprintf(msg,"T %u %u\r\n",(unsigned)tx,(unsigned)ty);
+//        HAL_UART_Transmit(&huart1,(uint8_t *)msg,(uint16_t)strlen(msg),20);
+//      }
+//    }
+//  ————————————————————————————————————————————————————————————————————————————  
+    
+    
+
+    
+//    __________________________________________________________________
+////    //单次发帧dancifazhen
 //    static uint8_t tf_sent = 0;
 //    if(tf_sent == 0)
 //    {
@@ -784,10 +949,16 @@ int main(void)
       if(HAL_GetTick() - t_wave >= 100)
       {
         t_wave = HAL_GetTick();
+        if(run_flag)
+        {       
         draw_wave();
         draw_dig();
         draw_meas();
+        }
       }
+      
+      
+      
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
