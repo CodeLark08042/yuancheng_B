@@ -36,15 +36,19 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define HIST  530
+#define HIST  550
 #define WAVE_Y 40
 #define WAVE_W 480
 #define WAVE_H 140
 #define DIG_Y 226
 #define DIG_H 15
-#define USE_SELF_LOOP 1
+#define USE_SELF_LOOP 0
 #define BTN_Y 186
 #define BTN_H 32
+#define VIEW_PTS 500
+#define X_OF(i) ((uint16_t)(((uint32_t)(i) * (WAVE_W - 1)) / (VIEW_PTS - 1)))  //"第 i 个采样点"换成"第几个像素"
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -113,6 +117,9 @@ uint8_t ch_mask = 0x1f;
 uint8_t gear_sel = 0;
 uint8_t run_flag = 1;
 
+volatile uint32_t last_frame_tick = 0;
+
+
 
 /* USER CODE END PV */
 
@@ -170,11 +177,11 @@ void draw_wave(void)
   if(ch_mask &0x01)
   {
   BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
-  y_prev = WAVE_Y +WAVE_H - 1 - (int)(((uint32_t)hist1[HIST - WAVE_W] * (WAVE_H - 1))/4095);
-  for(i = 1 ; i<WAVE_W ; i++)
+  y_prev = WAVE_Y +WAVE_H - 1 - (int)(((uint32_t)hist1[HIST - VIEW_PTS] * (WAVE_H - 1))/4095);
+  for(i = 1 ; i<VIEW_PTS ; i++)
   {
-    y = WAVE_Y + WAVE_H - 1 - (int)(((uint32_t)hist1[HIST - WAVE_W+i] * (WAVE_H - 1))/4095);
-    BSP_LCD_DrawLine((uint16_t)(i -1),(uint16_t)y_prev,(uint16_t)i,(uint16_t)y);
+    y = WAVE_Y + WAVE_H - 1 - (int)(((uint32_t)hist1[HIST - VIEW_PTS+i] * (WAVE_H - 1))/4095);
+    BSP_LCD_DrawLine(X_OF(i-1),(uint16_t)y_prev,X_OF(i),(uint16_t)y);
     y_prev = y;
   }
   }
@@ -182,11 +189,11 @@ void draw_wave(void)
   if(ch_mask &0x02)
   {
   BSP_LCD_SetTextColor(LCD_COLOR_YELLOW);
-  y_prev = WAVE_Y + WAVE_H -1 -(int)(((uint32_t)hist2[HIST - WAVE_W] * (WAVE_H - 1)) / 4095);
-  for(i = 1 ; i<WAVE_W ; i++)
+  y_prev = WAVE_Y + WAVE_H -1 -(int)(((uint32_t)hist2[HIST - VIEW_PTS] * (WAVE_H - 1)) / 4095);
+  for(i = 1 ; i<VIEW_PTS ; i++)
   {
-    y = WAVE_Y + WAVE_H - 1 - (int)(((uint32_t)hist2[HIST - WAVE_W+i] * (WAVE_H - 1))/4095);
-    BSP_LCD_DrawLine((uint16_t)(i -1),(uint16_t)y_prev,(uint16_t)i,(uint16_t)y);
+    y = WAVE_Y + WAVE_H - 1 - (int)(((uint32_t)hist2[HIST - VIEW_PTS+i] * (WAVE_H - 1))/4095);
+    BSP_LCD_DrawLine(X_OF(i-1),(uint16_t)y_prev,X_OF(i),(uint16_t)y);
     y_prev = y;
   }
 }
@@ -209,6 +216,12 @@ void draw_dig(void)
   BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
   BSP_LCD_FillRect(0,DIG_Y,WAVE_W,DIG_H * 3);
   
+  BSP_LCD_SetTextColor(LCD_COLOR_GRAY);
+  for(i = 0; i<WAVE_W;i+=48)
+  {
+    BSP_LCD_DrawLine((uint16_t)i,DIG_Y,(uint16_t)i,(uint16_t)(DIG_Y + DIG_H * 3 - 1));
+  }
+  
   for(ch = 0;ch<3;ch++)
   {
     if((ch_mask & (uint8_t)(0x04 <<ch)) == 0)
@@ -219,18 +232,34 @@ void draw_dig(void)
    
     BSP_LCD_SetTextColor(col[ch]);
     
-    y_prev = (histd[HIST - WAVE_W] & bit[ch])? y_hi :y_lo;
+    y_prev = (histd[HIST - VIEW_PTS] & bit[ch])? y_hi :y_lo;
     
-    for(i = 1;i< WAVE_W;i++)
+    for(i = 1;i< VIEW_PTS;i++)
     {
-      y = (histd[HIST- WAVE_W +i] & bit[ch])? y_hi :y_lo;
-      BSP_LCD_DrawLine((uint16_t)(i -1),(uint16_t)y_prev,(uint16_t)i,(uint16_t)y);
+      y = (histd[HIST- VIEW_PTS +i] & bit[ch])? y_hi :y_lo;
+      BSP_LCD_DrawLine(X_OF(i -1),(uint16_t)y_prev,X_OF(i),(uint16_t)y);
       y_prev = y;
       
         
     }
  
 }
+
+    BSP_LCD_SetFont(&Font12);
+    for(ch = 0; ch<3 ; ch++)
+    {
+      char txt[3];
+      
+      if((ch_mask  &(uint8_t)(0x04 <<ch)) == 0){continue;}
+      
+      txt[0] = 'D';
+      txt[1] = (char) ('1' +ch);
+      txt[2] = 0;
+      
+      BSP_LCD_SetTextColor(col[ch]);
+      BSP_LCD_DisplayStringAt(2, (uint16_t)(DIG_Y + ch * DIG_H + 2),(uint8_t *)txt,LEFT_MODE);
+    }
+  BSP_LCD_SetFont(&Font16);
 }
 
 static const uint16_t samples_us_tab[5] = {200 , 100, 20, 10, 2};
@@ -252,7 +281,7 @@ void meas_analog(const uint16_t *samples , uint16_t vmin, uint16_t vmax, uint32_
   hyst = ((int)vmax - (int)vmin)/8;
   if(hyst< 2){hyst =2;}
   
-  for(i = HIST - WAVE_W;i<HIST;i++)
+  for(i = HIST - VIEW_PTS;i<HIST;i++)
   {
     if((int)samples[i] < (mid_level - hyst)){armed = 1;}
     if((armed == 1) && (int)samples[i] > (mid_level +hyst))
@@ -306,7 +335,7 @@ void draw_meas(void)
    int i;
    
    
-   for(i = HIST - WAVE_W ;i<HIST ;i++)
+   for(i = HIST - VIEW_PTS ;i<HIST ;i++)
    {
      uint16_t a = hist1[i];
      uint16_t b = hist2[i];
@@ -428,9 +457,36 @@ void draw_buttons(void)
   draw_button(246,BTN_Y,44,BTN_H,"D2",(ch_mask & 0x08) ?1:0);
   draw_button(294,BTN_Y,44,BTN_H,"D3",(ch_mask & 0x10) ?1:0);
   draw_button(344,BTN_Y,64,BTN_H,(run_flag ?"RUN":"HOLD"),1);
+  draw_button(412,BTN_Y,64,BTN_H,"SAVE",1);
   
   BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
   BSP_LCD_SetFont(&Font16);
+}
+
+void export_csv(void)
+{
+  const char *hdr = "idx,ch1_mv,ch2_mv,d1,d2,d3\r\n";
+  char line[40];
+  int i;
+  
+  HAL_UART_Transmit(&huart1,(uint8_t *)hdr,(uint16_t)strlen(hdr),50);
+  
+  for(i = HIST -VIEW_PTS;i< HIST ;i++)
+  {
+    uint32_t mv1 = (uint32_t)hist1[i] *3300 /4095;
+    uint32_t mv2 = (uint32_t)hist2[i] *3300 /4095;
+    uint8_t  dg = histd[i];
+    
+    sprintf(line,"%d,%lu,%lu,%u,%u,%u\r\n",
+            i - (HIST - VIEW_PTS),
+            (unsigned long)mv1,  (unsigned long)mv2,
+            (unsigned)((dg &0x01) ?1 :0),
+            (unsigned)((dg &0x02) ?1 :0),
+            (unsigned)((dg &0x04) ?1 :0)
+            );
+    HAL_UART_Transmit(&huart1,(uint8_t *)line,(uint16_t)strlen(line),20);
+  }
+  
 }
 
 void touch_action(uint16_t x, uint16_t y)
@@ -470,7 +526,10 @@ void touch_action(uint16_t x, uint16_t y)
   {
     run_flag = (run_flag == 0)?1:0;
   }
-  
+  else if(x>=412 && x<= 476)
+  {
+    export_csv();
+  }
   else{return;}
   
   draw_buttons();
@@ -489,7 +548,7 @@ void touch_service(void)
   
   if(touch_read(&x,&y))
   {
-    if(t_touch == 0)
+    if(touched == 0)
     {
       touched =1;
       touch_action(x,y);
@@ -896,7 +955,7 @@ int main(void)
                   }
                 }
                 frm_ok++;
-                
+                last_frame_tick  = HAL_GetTick();
               }
             }
             fr_len = 0;
@@ -927,6 +986,21 @@ int main(void)
       sprintf(txt,"CH1 %u  CH2 %u  DIG %u",(unsigned)last_ch1,(unsigned)last_ch2,(unsigned)last_dig);
       BSP_LCD_DisplayStringAt(4,18,(uint8_t *)txt,LEFT_MODE);
       
+      sprintf(txt,"G%u",(unsigned)last_gear);
+      BSP_LCD_SetTextColor(LCD_COLOR_CYAN);
+      BSP_LCD_DisplayStringAt(250,18,(uint8_t *)txt,LEFT_MODE);
+      
+      if((HAL_GetTick() - last_frame_tick) > 500)
+      {
+         BSP_LCD_SetTextColor(LCD_COLOR_RED);
+         BSP_LCD_DisplayStringAt(310,18,(uint8_t *)"LINK LOST",LEFT_MODE);
+      }
+      else
+      {
+        BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
+         BSP_LCD_DisplayStringAt(310,18,(uint8_t *)"LINK OK",LEFT_MODE);
+      }
+      BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
 //      sprintf(txt,"FRM %lu",(unsigned long)frm_ok);
 //      BSP_LCD_DisplayStringAt(8,4,(uint8_t *)txt,LEFT_MODE);
 //      
