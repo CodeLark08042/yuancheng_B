@@ -31,3 +31,14 @@ Drivers/BSP/STM32F7xx_Nucleo_144/
 *.zip
 *.bak
 *.tmp
+
+# ---- 课程材料与学习笔记（不入库，仅保留本地）----
+/*.md
+/*.pdf
+/*.docx
+/*.xlsx
+
+# ---- IAR 自动生成文件 ----
+EWARM/settings/
+EWARM/*.dep
+EWARM/Backup of *.ewp
