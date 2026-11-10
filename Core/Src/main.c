@@ -60,7 +60,7 @@
 
 /* USER CODE BEGIN PV */
 uint8_t rx_byte;
-volatile uint8_t rb[512];
+volatile uint8_t rb[8192];
 volatile uint16_t rb_head = 0 , rb_tail = 0;
 volatile uint8_t  last_byte = 0;
 volatile uint32_t rx_count = 0;
@@ -817,7 +817,7 @@ int main(void)
 //    while (rb_tail != rb_head)
 //    {
 //      uint8_t b  = rb[rb_tail];
-//      rb_tail = (uint16_t)((rb_tail + 1) & 511);
+//      rb_tail = (uint16_t)((rb_tail + 1) & 8191);
 //      rx_count++;
 //      
 //      if(b == '\n')
@@ -868,7 +868,7 @@ int main(void)
         while (rb_tail != rb_head)
     {
       uint8_t b = rb[rb_tail];
-      rb_tail= (uint16_t)((rb_tail + 1) & 511);
+      rb_tail= (uint16_t)((rb_tail + 1) & 8191);
       rx_count++;
       
       if(fr_st == 0)
@@ -1097,7 +1097,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART6)
   {
-  uint16_t next = (uint16_t)((rb_head + 1) & 511);
+  uint16_t next = (uint16_t)((rb_head + 1) & 8191);
   if(next != rb_tail)
   {
     rb[rb_head] = rx_byte;
