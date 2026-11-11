@@ -179,7 +179,7 @@ uint16_t crc16_ccitt_false(const uint8_t *data, uint32_t len)
 
 
 static void  draw_minmax_line(const uint16_t *h , uint32_t color)
-{
+{                                                                        //在draw_wave里面用
   uint16_t mn = 4095,mx =0 ;
   int imx = 0;
   int i;
@@ -324,16 +324,16 @@ void draw_dig(void)
   int y_lo;
   int y;
   int y_prev;
-  
+  //——————————————————————画数字通道框线————————————————————————————————————————————
   BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
-  BSP_LCD_FillRect(0,DIG_Y,WAVE_W,DIG_H * 3);
+  BSP_LCD_FillRect(0,DIG_Y,WAVE_W,DIG_H * 3);   //DIG_Y 226   WAVE_W  480 DIG_H 15
   
   BSP_LCD_SetTextColor(LCD_COLOR_GRAY);
   for(i = 0; i<WAVE_W;i+=48)
   {
     BSP_LCD_DrawLine((uint16_t)i,DIG_Y,(uint16_t)i,(uint16_t)(DIG_Y + DIG_H * 3 - 1));
   }
-  
+  //————————————————————————————依次for循环画数字通道线————————————————————————————————————————————————————
     for(ch = 0;ch<3;ch++)
     {
       if((ch_mask & (uint8_t)(0x04 <<ch)) == 0)       //为0说明被关掉了，就continue跳过不画   ch 0 1 2
@@ -353,7 +353,7 @@ void draw_dig(void)
         y_prev = y;   
       }    
   }
-  
+  //————————分析数字通道数据——————————————————
   meas_dig(0x01,&d1_f,&d1_p,&d1_d);
   meas_dig(0x02,&d2_f,&d2_p,&d2_d);
   meas_dig(0x04,&d3_f,&d3_p,&d3_d);
@@ -371,6 +371,7 @@ void draw_dig(void)
   BSP_LCD_SetFont(&Font12);
   BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
   
+  //————————————————————————————画数字通道标志D1 D2 D3——————————————————————————————————
   for(ch = 0;ch < 3;ch++)
   {
     if((ch_mask & (uint8_t)(0x04 << ch)) == 0)
@@ -494,24 +495,26 @@ void draw_meas(void)
 //  efv1 = pp1/sqrt(2);     //开根号
   meas_analog(hist1, mn1 , mx1, &freq1_hz , &period1_us, &duty1_pct);
   meas_analog(hist2, mn2 , mx2, &freq2_hz , &period2_us, &duty2_pct);
+  
+  //CH1VPP 最大最小值
   sprintf(t1, "CH1 PP %lu.%02lu V",               //efv %lu.%02lu  MX %lu.%02lu MN %lu.%02lu
           (unsigned long)(pp1/1000),(unsigned long)((pp1 %1000)/10)
 //          (unsigned long)(vx1/1000),(unsigned long)((vx1 %1000)/10),
-//          (unsigned long)(vn1/1000),(unsigned long)((vn1 %1000)/10)
+//          (unsigned long)(vn1/1000),(unsigned long)((vn1 %1000)/10),
 //           (unsigned long)(efv1/1000),(unsigned long)((efv1 %1000)/10)
           );
-  
+  //CH2VPP 最大最小值
   sprintf(t2, "CH2 PP %lu.%02lu V",              //  MX %lu.%02lu MN %lu.%02lu
           (unsigned long)(pp2/1000),(unsigned long)((pp2 %1000)/10)
 //          (unsigned long)(vx2/1000),(unsigned long)((vx2 %1000)/10),
 //          (unsigned long)(vn2/1000),(unsigned long)((vn2 %1000)/10)
           );
-  
+  //CH1频率 周期 占空比
   if(freq1_hz > 0)
   {
-    sprintf(line3,"F %luHZ T %lu.%lums",          // D%lu%%
-            (unsigned long)freq1_hz,
-             (unsigned long)(period1_us/1000)
+    sprintf(line3,"F %luHZ",          // D%lu%%   T %lu.%lums
+            (unsigned long)freq1_hz
+//             (unsigned long)(period1_us/1000)
 //             (unsigned long)((period1_us%1000)/10),
 //              (unsigned long)duty1_pct
                 );
@@ -520,11 +523,13 @@ void draw_meas(void)
   {
     sprintf(line3,"F --- T--- D---");
   }
+  
+    //CH2频率 周期 占空比
    if(freq2_hz > 0)
   {
-    sprintf(line4,"F %luHZ T %lu.%lums",          // D%lu%%
-            (unsigned long)freq2_hz,
-             (unsigned long)(period2_us/1000)
+    sprintf(line4,"F %luHZ",          // D%lu%%     T %lu.%lums
+            (unsigned long)freq2_hz
+//             (unsigned long)(period2_us/1000)
 //             (unsigned long)((period2_us%1000)/10),
 //              (unsigned long)duty2_pct
                 );
@@ -547,7 +552,7 @@ void draw_meas(void)
   
 }
 
-
+//UART控制
 void send_ctrl(UART_HandleTypeDef *huart, uint8_t cmd, uint16_t param)
 {
   uint8_t cf[9];
@@ -571,7 +576,7 @@ void send_ctrl(UART_HandleTypeDef *huart, uint8_t cmd, uint16_t param)
   
   
 }
-
+//调节方波频率
 void set_out_freq(uint16_t hz)
 {
   if(hz < 100){hz = 100;}
@@ -583,6 +588,8 @@ void set_out_freq(uint16_t hz)
   send_ctrl(&huart6,0x07,out_freq_hz);
 #endif
 }
+
+//画按钮函数
 void draw_button(uint16_t x, uint16_t y,uint16_t w,uint16_t h,const char *s ,uint8_t on)
 {
   uint32_t bg;
@@ -596,6 +603,7 @@ void draw_button(uint16_t x, uint16_t y,uint16_t w,uint16_t h,const char *s ,uin
   BSP_LCD_DisplayStringAt((uint16_t)(x + 6),(uint16_t)(y +10),(uint8_t *)s,LEFT_MODE);
 }
 
+//设计按钮数量类型
 void draw_buttons(void)
 {
   char txt[8];
@@ -605,7 +613,7 @@ void draw_buttons(void)
   if(gear_sel == 0){sprintf(txt,"10ms");}
   else{sprintf(txt,"5ms");}
   
-  draw_button(4,BTN_Y,76,BTN_H,txt,1);
+  draw_button(4,BTN_Y,60,BTN_H,txt,1);
   
   draw_button(63,BTN_Y,44,BTN_H,"CH1",(ch_mask & 0x01) ?1:0);
   draw_button(110,BTN_Y,44,BTN_H,"CH2",(ch_mask & 0x02) ?1:0);
