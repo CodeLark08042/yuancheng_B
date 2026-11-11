@@ -613,7 +613,7 @@ void draw_buttons(void)
   if(gear_sel == 0){sprintf(txt,"10ms");}
   else{sprintf(txt,"5ms");}
   
-  draw_button(4,BTN_Y,60,BTN_H,txt,1);
+  draw_button(4,BTN_Y,54,BTN_H,txt,1);
   
   draw_button(63,BTN_Y,44,BTN_H,"CH1",(ch_mask & 0x01) ?1:0);
   draw_button(110,BTN_Y,44,BTN_H,"CH2",(ch_mask & 0x02) ?1:0);
@@ -629,7 +629,7 @@ void draw_buttons(void)
   BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
   BSP_LCD_SetFont(&Font16);
 }
-
+//导出CSV
 void export_csv(void)
 {
   const char *hdr = "idx,ch1_mv,ch2_mv,d1,d2,d3\r\n";
