@@ -22,6 +22,7 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "touch.h"
+#include "math.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include<stdio.h>
@@ -59,11 +60,14 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+
+//chuan kou 串口
 uint8_t rx_byte;
-volatile uint8_t rb[8192];
-volatile uint16_t rb_head = 0 , rb_tail = 0;
-volatile uint8_t  last_byte = 0;
-volatile uint32_t rx_count = 0;
+volatile uint8_t rb[8192];    //huan xing huan chong   环形缓冲
+volatile uint16_t rb_head = 0 , rb_tail = 0;     //rb_head——xie zhi 写指针(中断)     rb_tail——读指针（主循环）
+volatile uint8_t  last_byte = 0;    //上一字节   判断帧头
+volatile uint32_t rx_count = 0;      //累计收到字节数
+
 
 char line_buf[64];
 volatile uint16_t line_len = 0;
@@ -74,31 +78,43 @@ volatile uint8_t last_kind =0 ;
 volatile  uint8_t lcd_ret = 0xff;
 //uint32_t t_text = 0;
 
-volatile uint32_t last_ch1 = 0;
+//最后状态 用于显示
+volatile uint32_t last_ch1 = 0;      //CH1 原始值
 volatile uint32_t last_ch2 = 0;
 volatile uint8_t last_dig = 0;
-
-volatile uint16_t crc_test = 0;
-
-uint8_t fr[260];
-uint8_t tf[260];
-uint16_t fr_len = 0;
-uint8_t fr_st = 0;
-volatile uint32_t frm_ok = 0;
-volatile uint32_t frm_crc_err = 0;
-volatile uint32_t frm_type_err = 0;
-volatile uint32_t seq_err = 0;
 volatile uint32_t last_seq = 0;
+volatile uint32_t last_frame_tick = 0;
+volatile uint16_t crc_test = 0;
+//button
+uint8_t ch_mask = 0x1f;
+uint8_t gear_sel = 0;
+uint8_t run_flag = 1;
+
+
+
+//zhen jie xi帧解析
+uint8_t fr[260];         //接收帧缓冲
+uint8_t tf[260];
+uint16_t fr_len = 0;         //mu qian shou dao zi jie shu
+uint8_t fr_st = 0;           //帧解析状态机                                     
+volatile uint32_t frm_ok = 0;     //CRC通过帧数量
+volatile uint32_t frm_crc_err = 0;        //CRC错误帧数量
+volatile uint32_t frm_type_err = 0;
+volatile uint32_t seq_err = 0;   //序列号跳变数
+
 volatile uint16_t first_raw1 = 0;
 volatile uint16_t first_raw2 = 0;
 volatile uint8_t first_dig = 0;
 
-uint16_t hist1[HIST];
+
+//历史数据 绘图唯一数据
+uint16_t hist1[HIST];    
 uint16_t hist2[HIST];
 uint8_t histd[HIST];
 
 volatile uint8_t last_gear = 0;
 
+//测量 变量  
 uint32_t freq1_hz;
 uint32_t freq2_hz;
 uint32_t period1_us;
@@ -106,19 +122,24 @@ uint32_t period2_us;
 uint32_t duty1_pct;
 uint32_t duty2_pct;
 
+
+uint32_t freqd1_hz;
+uint32_t freqd2_hz;
+uint32_t freqd3_hz;
+uint32_t periodd1_us;
+uint32_t periodd2_us;
+uint32_t periodd3_us;
+uint32_t dutyd1_pct;
+uint32_t dutyd2_pct;
+uint32_t dutyd3_pct;
 char line3[40];
 char line4[40];
 
 
 uint8_t touch_ok =0;
 
-//button
-uint8_t ch_mask = 0x1f;
-uint8_t gear_sel = 0;
-uint8_t run_flag = 1;
 
-volatile uint32_t last_frame_tick = 0;
-
+uint16_t out_freq_hz = 100;
 
 
 /* USER CODE END PV */
@@ -154,13 +175,37 @@ uint16_t crc16_ccitt_false(const uint8_t *data, uint32_t len)
   }
   return crc;
 }
+//————————————————————————————————————————————————CRC16校验———————————上方——————
 
+
+static void  draw_minmax_line(const uint16_t *h , uint32_t color)
+{
+  uint16_t mn = 4095,mx =0 ;
+  int imx = 0;
+  int i;
+  int ymax ,ymin,xm;
+  
+  for(i =HIST - VIEW_PTS ; i<HIST ; i++)
+  {
+    if(h[i] < mn){mn = h[i];}
+    if(h[i] > mx){mx = h[i]; imx = i;}
+  }
+  ymax = WAVE_Y + WAVE_H - 1 - (int)((uint32_t)mx * (WAVE_H - 1)/4095);
+  ymin = WAVE_Y + WAVE_H - 1 - (int)((uint32_t)mn * (WAVE_H - 1)/4095);
+  xm = (int)((uint32_t)(imx - (HIST - VIEW_PTS)) * (WAVE_W - 1)/(VIEW_PTS - 1));
+  
+  BSP_LCD_SetTextColor(color);
+  
+  BSP_LCD_DrawLine(0,(uint16_t)ymax,480,(uint16_t)ymax);
+  BSP_LCD_DrawLine(0,(uint16_t)ymin,480,(uint16_t)ymin);
+  
+}
 void draw_wave(void)
 {
   int i;
   int y;
   int y_prev;
-  
+  //——————————————————————————————画网格——————————————————————————————————————————————————
   BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
   BSP_LCD_FillRect(0, WAVE_Y,WAVE_W,WAVE_H);
   
@@ -169,11 +214,26 @@ void draw_wave(void)
   {
     BSP_LCD_DrawLine((uint16_t)i,WAVE_Y,(uint16_t)i,(uint16_t)(WAVE_Y + WAVE_H - 1));
   }
+  
   for(i = 0;i<WAVE_H;i+=45)
   {
     BSP_LCD_DrawLine(0,(uint16_t)(WAVE_Y +i),(uint16_t)(WAVE_W - 1),(uint16_t)(WAVE_Y +i));
   }
-    //————————————————————————————————绘制CH1——————————————————————————————————————
+  //——————————————————————————电压值————————————————————————————————————————————————————————————
+//  static const char *lab[4] = {"3.3V","2.2V","1.1V","0V"};
+//  int k;
+//  
+//  BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
+//  BSP_LCD_SetFont(&Font12);
+//  BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+//  
+//  for(k = 0;k<4 ; k ++)
+//  {
+//    BSP_LCD_DisplayStringAt(446,(uint16_t)(WAVE_Y + k * 45 + 1),(uint8_t *)lab[k],LEFT_MODE);
+//  }
+//  BSP_LCD_SetFont(&Font16);
+  
+//————————————————————————————————绘制CH1——————————————————————————————————————
   if(ch_mask &0x01)
   {
   BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
@@ -197,14 +257,66 @@ void draw_wave(void)
     y_prev = y;
   }
 }
-
+//if(ch_mask & 0x01){draw_minmax_line(hist1,LCD_COLOR_WHITE);}
+//if(ch_mask & 0x02){draw_minmax_line(hist2,LCD_COLOR_ORANGE);}
 }
+static const uint16_t samples_us_tab[5] = {200 , 100, 20, 10, 2};
+
+void meas_dig(const uint8_t mask , uint32_t *freq_hz, uint32_t *period_us, uint32_t *duty_pct)
+{
+  
+  uint16_t first_edge = 0;
+  uint16_t last_edge = 0;
+  uint16_t edge_cnt = 0;
+  uint16_t high_cnt= 0;
+  uint32_t sample_us;
+  uint8_t gear;
+  int i;
+  int prev  = 0;
+  
+  *freq_hz =0;  
+  *period_us = 0;
+  *duty_pct = 0;
+  gear = last_gear;
+  if(gear > 4 ){gear = 0;}
+  sample_us = samples_us_tab[gear];
+  
+  
+  for(i = HIST - VIEW_PTS;i<HIST;i++)
+  {
+    uint8_t cur = (histd[i] & mask )?1 :0;
+    
+    if(prev == 0  && cur == 1)
+    {
+      if(edge_cnt == 0){first_edge = i;}
+      last_edge = i;
+      edge_cnt ++;
+    }
+    prev = cur;
+    }
+  
+  if(edge_cnt < 2){return;}
+  if(last_edge < first_edge){return;}
+  
+  for(i = first_edge ; i<= last_edge;i++)
+  {
+    if(histd[i] & mask){high_cnt ++;}
+  }
+   *freq_hz =(uint32_t)(edge_cnt - 1)*1000000/((uint32_t)(last_edge - first_edge)*sample_us);  
+  *period_us = (uint32_t)(last_edge - first_edge)*sample_us/(edge_cnt - 1);
+  *duty_pct = (uint32_t)high_cnt * 100 /(uint32_t)(last_edge - first_edge + 1);
+
+  }
 
 void draw_dig(void)
 {
   static const uint32_t col[3] = {LCD_COLOR_BLUE,LCD_COLOR_CYAN,LCD_COLOR_MAGENTA};
   static const uint8_t  bit[3] = {0x01,0x02,0x04};
-  
+  uint32_t d1_f,d2_f,d3_f,d1_p,d2_p,d3_p,d1_d,d2_d,d3_d;
+  char d1text[24],d2text[24],d3text[24];
+    
+  uint32_t hi_us;                                 
+  char tag[3];
   int ch;
   int i;
   int lane;
@@ -222,47 +334,75 @@ void draw_dig(void)
     BSP_LCD_DrawLine((uint16_t)i,DIG_Y,(uint16_t)i,(uint16_t)(DIG_Y + DIG_H * 3 - 1));
   }
   
-  for(ch = 0;ch<3;ch++)
+    for(ch = 0;ch<3;ch++)
+    {
+      if((ch_mask & (uint8_t)(0x04 <<ch)) == 0)       //为0说明被关掉了，就continue跳过不画   ch 0 1 2
+      {continue;}
+      lane = DIG_Y + ch * DIG_H;
+      y_hi = lane + 3;
+      y_lo = lane +DIG_H - 3;                         //两边内缩3，防止和其他通道混叠
+     
+      BSP_LCD_SetTextColor(col[ch]);
+      
+      y_prev = (histd[HIST - VIEW_PTS] & bit[ch])? y_hi :y_lo;
+      
+      for(i = 1;i< VIEW_PTS;i++)
+      {
+        y = (histd[HIST- VIEW_PTS +i] & bit[ch])? y_hi :y_lo;
+        BSP_LCD_DrawLine(X_OF(i -1),(uint16_t)y_prev,X_OF(i),(uint16_t)y);
+        y_prev = y;   
+      }    
+  }
+  
+  meas_dig(0x01,&d1_f,&d1_p,&d1_d);
+  meas_dig(0x02,&d2_f,&d2_p,&d2_d);
+  meas_dig(0x04,&d3_f,&d3_p,&d3_d);
+  
+  
+  sprintf(d1text,"%luHz %lu%%",(unsigned long)d1_f,(unsigned long)d1_d);    
+  sprintf(d2text,"%luHz %lu%%",(unsigned long)d2_f,(unsigned long)d2_d);   
+  sprintf(d3text,"%luHz %lu%%",(unsigned long)d3_f,(unsigned long)d3_d);
+
+//hi_us = (uint32_t)d2_p * d2_d / 100; 
+//sprintf(d2text, "%luHz %lu.%02lu ms",
+//        (unsigned long)d2_f,
+//        (unsigned long)(hi_us / 1000),
+//        (unsigned long)((hi_us % 1000) / 10));
+  BSP_LCD_SetFont(&Font12);
+  BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
+  
+  for(ch = 0;ch < 3;ch++)
   {
-    if((ch_mask & (uint8_t)(0x04 <<ch)) == 0)
-    {continue;}
-    lane = DIG_Y + ch * DIG_H;
-    y_hi = lane + 3;
-    y_lo = lane +DIG_H - 3;
-   
+    if((ch_mask & (uint8_t)(0x04 << ch)) == 0)
+    { continue;
+    }
+    
+    tag[0] = 'D';
+    tag[1] = (char)('1' + ch);
+    tag[2] = 0;
+    
     BSP_LCD_SetTextColor(col[ch]);
     
-    y_prev = (histd[HIST - VIEW_PTS] & bit[ch])? y_hi :y_lo;
     
-    for(i = 1;i< VIEW_PTS;i++)
+    BSP_LCD_DisplayStringAt(2,(uint16_t)(DIG_Y + ch *DIG_H + 2),(uint8_t *)tag,LEFT_MODE);
+    
+    if(ch == 0)
     {
-      y = (histd[HIST- VIEW_PTS +i] & bit[ch])? y_hi :y_lo;
-      BSP_LCD_DrawLine(X_OF(i -1),(uint16_t)y_prev,X_OF(i),(uint16_t)y);
-      y_prev = y;
-      
-        
+      BSP_LCD_DisplayStringAt(300,(uint16_t)(DIG_Y + ch * DIG_H + 2),(uint8_t *)d1text,LEFT_MODE);
     }
- 
-}
-
-    BSP_LCD_SetFont(&Font12);
-    for(ch = 0; ch<3 ; ch++)
+    if(ch ==1)
     {
-      char txt[3];
-      
-      if((ch_mask  &(uint8_t)(0x04 <<ch)) == 0){continue;}
-      
-      txt[0] = 'D';
-      txt[1] = (char) ('1' +ch);
-      txt[2] = 0;
-      
-      BSP_LCD_SetTextColor(col[ch]);
-      BSP_LCD_DisplayStringAt(2, (uint16_t)(DIG_Y + ch * DIG_H + 2),(uint8_t *)txt,LEFT_MODE);
+      BSP_LCD_DisplayStringAt(300,(uint16_t)(DIG_Y + ch * DIG_H + 2),(uint8_t *)d2text,LEFT_MODE);
     }
+    if(ch == 2)
+    {
+      BSP_LCD_DisplayStringAt(300,(uint16_t)(DIG_Y + ch * DIG_H + 2),(uint8_t *)d3text,LEFT_MODE);
+    }
+  }
   BSP_LCD_SetFont(&Font16);
 }
 
-static const uint16_t samples_us_tab[5] = {200 , 100, 20, 10, 2};
+
 
 void meas_analog(const uint16_t *samples , uint16_t vmin, uint16_t vmax, uint32_t *freq_hz, uint32_t *period_us, uint32_t *duty_pct)
 {
@@ -313,9 +453,7 @@ void meas_analog(const uint16_t *samples , uint16_t vmin, uint16_t vmax, uint32_
   *freq_hz =(uint32_t)(edge_cnt - 1)* 1000000UL / ((uint32_t)(last_edge - first_edge)* sample_us);  
   *period_us = (uint32_t)(last_edge - first_edge) *sample_us /(uint32_t)(edge_cnt - 1);
   *duty_pct = (uint32_t) high_cnt *100 / (uint32_t)(last_edge - first_edge);
-    
-  
-  
+
 }
 
 void draw_meas(void)
@@ -330,6 +468,7 @@ void draw_meas(void)
   uint32_t vn1;
   uint32_t vx2;
   uint32_t vn2;
+  uint32_t efv1;
    char t1[40];
    char t2[40];
    int i;
@@ -352,27 +491,30 @@ void draw_meas(void)
   vx2 = (uint32_t)mx2 *3300/4095;
   vn1 = (uint32_t)mn1 *3300/4095;
   vn2 = (uint32_t)mn2 *3300/4095;
-    
+//  efv1 = pp1/sqrt(2);     //开根号
   meas_analog(hist1, mn1 , mx1, &freq1_hz , &period1_us, &duty1_pct);
   meas_analog(hist2, mn2 , mx2, &freq2_hz , &period2_us, &duty2_pct);
-  sprintf(t1, "CH1 PP %lu.%02lu  MX %lu.%02lu MN %lu.%02lu",
-          (unsigned long)(pp1/1000),(unsigned long)((pp1 %1000)/10),
-          (unsigned long)(vx1/1000),(unsigned long)((vx1 %1000)/10),
-          (unsigned long)(vn1/1000),(unsigned long)((vn1 %1000)/10)
+  sprintf(t1, "CH1 PP %lu.%02lu V",               //efv %lu.%02lu  MX %lu.%02lu MN %lu.%02lu
+          (unsigned long)(pp1/1000),(unsigned long)((pp1 %1000)/10)
+//          (unsigned long)(vx1/1000),(unsigned long)((vx1 %1000)/10),
+//          (unsigned long)(vn1/1000),(unsigned long)((vn1 %1000)/10)
+//           (unsigned long)(efv1/1000),(unsigned long)((efv1 %1000)/10)
           );
   
-  sprintf(t2, "CH2 PP %lu.%02lu  MX %lu.%02lu MN %lu.%02lu",
-          (unsigned long)(pp2/1000),(unsigned long)((pp2 %1000)/10),
-          (unsigned long)(vx2/1000),(unsigned long)((vx2 %1000)/10),
-          (unsigned long)(vn2/1000),(unsigned long)((vn2 %1000)/10)
+  sprintf(t2, "CH2 PP %lu.%02lu V",              //  MX %lu.%02lu MN %lu.%02lu
+          (unsigned long)(pp2/1000),(unsigned long)((pp2 %1000)/10)
+//          (unsigned long)(vx2/1000),(unsigned long)((vx2 %1000)/10),
+//          (unsigned long)(vn2/1000),(unsigned long)((vn2 %1000)/10)
           );
   
   if(freq1_hz > 0)
   {
-    sprintf(line3,"F %luHZ T %lu.%lums D%lu%%",
+    sprintf(line3,"F %luHZ T %lu.%lums",          // D%lu%%
             (unsigned long)freq1_hz,
-             (unsigned long)(period1_us/1000), (unsigned long)((period1_us%1000)/10),
-              (unsigned long)duty1_pct);
+             (unsigned long)(period1_us/1000)
+//             (unsigned long)((period1_us%1000)/10),
+//              (unsigned long)duty1_pct
+                );
   }
   else
   {
@@ -380,10 +522,12 @@ void draw_meas(void)
   }
    if(freq2_hz > 0)
   {
-    sprintf(line4,"F %luHZ T %lu.%lums D%lu%%",
+    sprintf(line4,"F %luHZ T %lu.%lums",          // D%lu%%
             (unsigned long)freq2_hz,
-             (unsigned long)(period2_us/1000), (unsigned long)((period2_us%1000)/10),
-              (unsigned long)duty2_pct);
+             (unsigned long)(period2_us/1000)
+//             (unsigned long)((period2_us%1000)/10),
+//              (unsigned long)duty2_pct
+                );
   }
   else
   {
@@ -402,6 +546,7 @@ void draw_meas(void)
   
   
 }
+
 
 void send_ctrl(UART_HandleTypeDef *huart, uint8_t cmd, uint16_t param)
 {
@@ -427,6 +572,17 @@ void send_ctrl(UART_HandleTypeDef *huart, uint8_t cmd, uint16_t param)
   
 }
 
+void set_out_freq(uint16_t hz)
+{
+  if(hz < 100){hz = 100;}
+  if(hz > 1000){hz = 1000;}
+  
+  out_freq_hz = hz;
+  
+#if !USE_SELF_LOOP
+  send_ctrl(&huart6,0x07,out_freq_hz);
+#endif
+}
 void draw_button(uint16_t x, uint16_t y,uint16_t w,uint16_t h,const char *s ,uint8_t on)
 {
   uint32_t bg;
@@ -451,13 +607,16 @@ void draw_buttons(void)
   
   draw_button(4,BTN_Y,76,BTN_H,txt,1);
   
-  draw_button(86,BTN_Y,52,BTN_H,"CH1",(ch_mask & 0x01) ?1:0);
-  draw_button(142,BTN_Y,52,BTN_H,"CH2",(ch_mask & 0x02) ?1:0);
-  draw_button(198,BTN_Y,44,BTN_H,"D1",(ch_mask & 0x04) ?1:0);
-  draw_button(246,BTN_Y,44,BTN_H,"D2",(ch_mask & 0x08) ?1:0);
-  draw_button(294,BTN_Y,44,BTN_H,"D3",(ch_mask & 0x10) ?1:0);
-  draw_button(344,BTN_Y,64,BTN_H,(run_flag ?"RUN":"HOLD"),1);
-  draw_button(412,BTN_Y,64,BTN_H,"SAVE",1);
+  draw_button(63,BTN_Y,44,BTN_H,"CH1",(ch_mask & 0x01) ?1:0);
+  draw_button(110,BTN_Y,44,BTN_H,"CH2",(ch_mask & 0x02) ?1:0);
+  draw_button(157,BTN_Y,34,BTN_H,"D1",(ch_mask & 0x04) ?1:0);
+  draw_button(194,BTN_Y,34,BTN_H,"D2",(ch_mask & 0x08) ?1:0);
+  draw_button(231,BTN_Y,34,BTN_H,"D3",(ch_mask & 0x10) ?1:0);
+  
+  draw_button(268,BTN_Y,34,BTN_H,"Hz-",1);
+  draw_button(305,BTN_Y,64,BTN_H,"Hz+",1);
+  draw_button(342,BTN_Y,58,BTN_H,(run_flag ?"RUN":"HOLD"),1);
+  draw_button(403,BTN_Y,68,BTN_H,"SAVE",1);
   
   BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
   BSP_LCD_SetFont(&Font16);
@@ -493,7 +652,7 @@ void touch_action(uint16_t x, uint16_t y)
 {
   if(y<BTN_Y || y>(BTN_Y + BTN_H)){return;}
   
-  if(x>= 4&& x<= 80)
+  if(x>= 4&& x<= 59)
   {
     gear_sel = (gear_sel == 0)?1:0;
 
@@ -501,32 +660,56 @@ void touch_action(uint16_t x, uint16_t y)
     send_ctrl(&huart6,0x01,gear_sel);
 #endif
   }
-  else if(x>= 86 && x<=138)
+  else if(x>= 63 && x<=106)
   {
     ch_mask ^= 0x01;  
+#if !USE_SELF_LOOP 
+    send_ctrl(&huart6,0x02,ch_mask);
+#endif
   }
-  else if(x>= 142 && x <=194)
+  else if(x>= 110 && x <=153)
   {
     ch_mask ^= 0x02;
+#if !USE_SELF_LOOP 
+    send_ctrl(&huart6,0x02,ch_mask);
+#endif    
   }
-  else if(x>=198 && x<= 242)
+  else if(x>=157 && x<= 190)
   {
     ch_mask ^= 0x04;
+#if !USE_SELF_LOOP 
+    send_ctrl(&huart6,0x02,ch_mask);
+#endif
   }
-  else if(x>=246 && x<= 290)
+  else if(x>=194 && x<= 227)
   {
     ch_mask ^= 0x08;
+#if !USE_SELF_LOOP 
+    send_ctrl(&huart6,0x02,ch_mask);
+#endif
   }
   
-  else if(x>=294 && x<= 338)
+  else if(x>=231 && x<= 264)
   {
     ch_mask ^= 0x10;
+#if !USE_SELF_LOOP 
+    send_ctrl(&huart6,0x02,ch_mask);
+#endif
   }
-  else if(x>=344 && x<= 408)
+  
+  else if(x>= 268 && x <= 301)
+  {
+    set_out_freq((uint16_t)(out_freq_hz - 100));
+  }
+  else if(x>= 305 && x <= 338)
+  {
+    set_out_freq((uint16_t)(out_freq_hz + 100));
+  }
+  else if(x>=342 && x<= 399)
   {
     run_flag = (run_flag == 0)?1:0;
   }
-  else if(x>=412 && x<= 476)
+  else if(x>=403 && x<= 470)
   {
     export_csv();
   }
@@ -559,6 +742,7 @@ void touch_service(void)
     touched = 0;
   }
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -692,6 +876,10 @@ int main(void)
        uint16_t raw2 = (uint16_t)((tx_seq * 5 + k )&0x0fff);
 //       uint16_t raw1 = (uint16_t)((tx_seq * 7 + k )&0x0fff);
 //       uint16_t raw2 = (uint16_t)((tx_seq * 5 + k )&0x0fff);
+
+       //三角波测试
+//       uint16_t raw1 = (n < 25) ? (uint16_t)(n*170):(uint16_t)((49 - n) * 170);
+       
        uint16_t w1 = (uint16_t)(raw1 << 4);
        uint16_t w2 = (uint16_t)(raw2 << 4);
        
@@ -734,12 +922,36 @@ int main(void)
 //      {
 //        char msg[24];
 //        sprintf(msg,"T %u %u\r\n",(unsigned)tx,(unsigned)ty);
-//        HAL_UART_Transmit(&huart1,(uint8_t *)msg,(uint16_t)strlen(msg),20);
+//        BSP_LCD_SetFont(&Font12);
+//        BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+//        BSP_LCD_DisplayStringAt(2,18,(uint8_t *)msg,LEFT_MODE);
+////        HAL_UART_Transmit(&huart1,(uint8_t *)msg,(uint16_t)strlen(msg),20);
 //      }
 //    }
-//  ————————————————————————————————————————————————————————————————————————————  
-    
-    
+//  ——————————————————————————————下边是xy交叉线——————————————————————————————————————————————  
+//    static uint32_t t_touch =0 ;
+//    if(HAL_GetTick() - t_touch >= 100)
+//    {
+//      uint16_t tx = 0;
+//      uint16_t ty = 0;
+//        
+//        t_touch = HAL_GetTick();
+//        if(touch_read(&tx,&ty))
+//            {
+//                    if(tx <WAVE_W && ty <272)
+//                    {
+//                      int x = (int)tx;
+//                      int y = (int)ty;
+//                      
+//                      BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+//                      
+//                        BSP_LCD_DrawLine(0,(uint16_t)y,480,(uint16_t)y);
+//              
+//                        BSP_LCD_DrawLine((uint16_t)x,41,(uint16_t)x,219);
+//                      
+//                    }
+//            }
+//    }
 
     
 //    __________________________________________________________________
@@ -924,7 +1136,7 @@ int main(void)
                 memmove(histd,histd + 50,(HIST - 50)*sizeof(uint8_t));
                 if(frm_ok > 0 && seq != (uint16_t)(last_seq + 1))
                 {
-                  seq_err++;
+                  seq_err+= (uint16_t)(seq - last_seq + 1 );
                 }
                 last_seq = seq;
                 last_gear = fr[5];                
@@ -964,9 +1176,35 @@ int main(void)
         }
       }
     static uint32_t t_lcd = 0;
+    
+    static uint32_t t_fps = 0  , last_ok = 0, fps = 0;
+    
+    if(HAL_GetTick() - t_fps >= 1000)
+    {
+      fps = frm_ok - last_ok;
+      last_ok = frm_ok;
+      t_fps = HAL_GetTick();
+    }
+//    char txt1[32];
+//    sprintf(txt1, "FPS %lu", (unsigned long)fps);
+//    BSP_LCD_SetTextColor(LCD_COLOR_CYAN);
+//    BSP_LCD_DisplayStringAt(400, 2, (uint8_t *)txt1, LEFT_MODE);
     if(HAL_GetTick() - t_lcd >= 200)
     {
       char txt[32];
+//      uint32_t tot = frm_crc_err + frm_ok;
+//      uint32_t pl;
+//      if (tot != 0)
+//      {
+//        pl = seq_err * 100/ tot;
+//      }
+//      else
+//      {
+//        pl = 0; //总帧数为 0，避免除零 
+//      }
+      
+      
+      
       t_lcd = HAL_GetTick();
       
       BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
@@ -975,32 +1213,47 @@ int main(void)
       BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
       BSP_LCD_SetFont(&Font16);
       
-      sprintf(txt,"FRM %lu SEQ %u  CE %lu  SE  %lu ",
+      sprintf(txt,"FRM %lu SEQ %u  CE %lu  SE  %lu",
               (unsigned long)frm_ok,
               (unsigned long)last_seq,
               (unsigned long)frm_crc_err,
-              (unsigned long)seq_err
+              (unsigned long)seq_err    //求丢包数时候加上
               );
       BSP_LCD_DisplayStringAt(4,2,(uint8_t *)txt,LEFT_MODE);
       
-      sprintf(txt,"CH1 %u  CH2 %u  DIG %u",(unsigned)last_ch1,(unsigned)last_ch2,(unsigned)last_dig);
-      BSP_LCD_DisplayStringAt(4,18,(uint8_t *)txt,LEFT_MODE);
+//      sprintf(txt,"CH1 %u  CH2 %u  DIG %u",(unsigned)(last_ch1),(unsigned)(last_ch2),(unsigned)last_dig);
+//      BSP_LCD_DisplayStringAt(4,18,(uint8_t *)txt,LEFT_MODE);
       
-      sprintf(txt,"G%u",(unsigned)last_gear);
-      BSP_LCD_SetTextColor(LCD_COLOR_CYAN);
-      BSP_LCD_DisplayStringAt(250,18,(uint8_t *)txt,LEFT_MODE);
+//      可以换成具体数值
+//      sprintf(txt," CH1 %lumV CH2 %lumV D%u",
+//        (unsigned long)(last_ch1*3300UL/4095),
+//        (unsigned long)(last_ch2*3300UL/4095),
+//        (unsigned)last_dig);
+//      BSP_LCD_DisplayStringAt(4,18,(uint8_t *)txt,LEFT_MODE);
+//      ————————————————————————————G值————————————————————————————————
+//      sprintf(txt,"G%u",(unsigned)last_gear);
+//      BSP_LCD_SetTextColor(LCD_COLOR_CYAN);
+//      BSP_LCD_DisplayStringAt(4,18,(uint8_t *)txt,LEFT_MODE);
+      
+
       
       if((HAL_GetTick() - last_frame_tick) > 500)
       {
          BSP_LCD_SetTextColor(LCD_COLOR_RED);
-         BSP_LCD_DisplayStringAt(310,18,(uint8_t *)"LINK LOST",LEFT_MODE);
+         BSP_LCD_DisplayStringAt(100,18,(uint8_t *)"LINK LOST",LEFT_MODE);  //前面加上的时候需要右移
       }
       else
       {
         BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
-         BSP_LCD_DisplayStringAt(310,18,(uint8_t *)"LINK OK",LEFT_MODE);
+         BSP_LCD_DisplayStringAt(100,18,(uint8_t *)"LINK OK",LEFT_MODE);
       }
-      BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+      //控制方波频率
+//      sprintf(txt,"OUT %uHz",(unsigned)out_freq_hz);
+//      BSP_LCD_SetTextColor(LCD_COLOR_CYAN);
+//      BSP_LCD_DisplayStringAt(2,18,(uint8_t *)txt,LEFT_MODE);
+//      BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+      
+      
 //      sprintf(txt,"FRM %lu",(unsigned long)frm_ok);
 //      BSP_LCD_DisplayStringAt(8,4,(uint8_t *)txt,LEFT_MODE);
 //      
@@ -1030,9 +1283,11 @@ int main(void)
         draw_meas();
         }
       }
-      
-      
-      
+      BSP_LCD_SetFont(&Font12); 
+      BSP_LCD_SetTextColor(LCD_COLOR_YELLOW);
+      BSP_LCD_DisplayStringAt(300, 20, (uint8_t *)"Li Kaixu 23211239", LEFT_MODE);
+      BSP_LCD_DisplayStringAt(300, 40, (uint8_t *)"Zhan Lin 23271081", LEFT_MODE);
+      BSP_LCD_SetFont(&Font16);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -1044,6 +1299,7 @@ int main(void)
   * @brief System Clock Configuration
   * @retval None
   */
+
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
